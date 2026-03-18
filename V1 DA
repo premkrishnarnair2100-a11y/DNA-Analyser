@@ -1,0 +1,140 @@
+import streamlit as st
+from Bio.Seq import Seq
+import pandas as pd
+import requests
+
+st.set_page_config(page_title="DNA Sequence Analyzer", page_icon="🧬", layout="centered")
+
+st.title("🧬 DNA Sequence Analyzer")
+st.caption("Analyze DNA sequences — GC content, protein translation, reverse complement, and AI-powered biological insights.")
+
+# ── Input ──────────────────────────────────────────────────────────────────────
+sequence = st.text_area("Enter DNA sequence:", placeholder="e.g. ATGCGTAAGCTT...")
+
+uploaded_file = st.file_uploader("Or upload a FASTA / TXT file", type=["fasta", "txt"])
+if uploaded_file is not None:
+    sequence = uploaded_file.read().decode("utf-8")
+
+# ── Analyze button ─────────────────────────────────────────────────────────────
+if st.button("Analyze Sequence", type="primary"):
+
+    # Strip FASTA header lines (lines starting with '>')
+    sequence = "\n".join(
+        line for line in sequence.split("\n")
+        if not line.startswith(">")
+    )
+
+    # Clean: remove whitespace, uppercase
+    seq = sequence.replace("\n", "").replace(" ", "").upper()
+
+    # ── Validation ────────────────────────────────────────────────────────────
+    if len(seq) == 0:
+        st.warning("Please enter a DNA sequence.")
+        st.stop()
+
+    valid_bases = set("ATGC")
+    if not set(seq).issubset(valid_bases):
+        invalid = set(seq) - valid_bases
+        st.error(f"Invalid characters found: {', '.join(sorted(invalid))}. Use only A, T, G, C.")
+        st.stop()
+
+    # ── Core calculations ─────────────────────────────────────────────────────
+    length = len(seq)
+    gc_content = (seq.count("G") + seq.count("C")) / length * 100
+    at_content = 100 - gc_content
+
+    dna = Seq(seq)
+
+    # Trim to nearest codon boundary before translating (avoids BiopythonWarning)
+    trimmed = Seq(seq[: len(seq) - len(seq) % 3])
+    protein = trimmed.translate()
+
+    reverse_complement = dna.reverse_complement()
+
+    # ── Find first ORF ────────────────────────────────────────────────────────
+    def find_first_orf(sequence_str):
+        stop_codons = {"TAA", "TAG", "TGA"}
+        start = sequence_str.find("ATG")
+        if start == -1:
+            return None
+        for i in range(start, len(sequence_str) - 2, 3):
+            codon = sequence_str[i:i+3]
+            if codon in stop_codons:
+                return sequence_str[start:i+3]
+        return None  # No stop codon found (open ORF)
+
+    orf = find_first_orf(seq)
+
+    # ── Display results ───────────────────────────────────────────────────────
+    st.subheader("Results")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Sequence length", f"{length} bp")
+    col2.metric("GC content", f"{gc_content:.1f}%")
+    col3.metric("AT content", f"{at_content:.1f}%")
+
+    # Nucleotide frequency chart
+    st.subheader("Nucleotide composition")
+    freq_data = pd.DataFrame(
+        {"Count": [seq.count(b) for b in "ATGC"],
+         "Frequency (%)": [seq.count(b) / length * 100 for b in "ATGC"]},
+        index=list("ATGC")
+    )
+    st.bar_chart(freq_data["Count"])
+    st.dataframe(freq_data.style.format({"Frequency (%)": "{:.1f}"}), use_container_width=True)
+
+    # Protein translation
+    st.subheader("Protein translation")
+    st.code(str(protein), language=None)
+    st.download_button(
+        "⬇ Download protein sequence",
+        data=str(protein),
+        file_name="protein.txt",
+        mime="text/plain"
+    )
+
+    # Amino acid breakdown
+    st.subheader("Amino acid breakdown")
+    amino_acid_names = {
+        "A": "Alanine",        "C": "Cysteine",       "D": "Aspartic acid",
+        "E": "Glutamic acid",  "F": "Phenylalanine",  "G": "Glycine",
+        "H": "Histidine",      "I": "Isoleucine",     "K": "Lysine",
+        "L": "Leucine",        "M": "Methionine",     "N": "Asparagine",
+        "P": "Proline",        "Q": "Glutamine",      "R": "Arginine",
+        "S": "Serine",         "T": "Threonine",      "V": "Valine",
+        "W": "Tryptophan",     "Y": "Tyrosine",
+    }
+    aa_rows = []
+    for aa in sorted(set(str(protein))):
+        if aa == "*":
+            aa_rows.append({"Code": "*", "Name": "Stop codon", "Count": str(protein).count("*")})
+        elif aa in amino_acid_names:
+            aa_rows.append({"Code": aa, "Name": amino_acid_names[aa], "Count": str(protein).count(aa)})
+    if aa_rows:
+        st.dataframe(pd.DataFrame(aa_rows).set_index("Code"), use_container_width=True)
+
+    # Reverse complement
+    st.subheader("Reverse complement")
+    st.code(str(reverse_complement), language=None)
+    st.download_button(
+        "⬇ Download reverse complement",
+        data=str(reverse_complement),
+        file_name="reverse_complement.txt",
+        mime="text/plain"
+    )
+
+    # First ORF
+    st.subheader("First open reading frame (ORF)")
+    if orf:
+        st.code(orf, language=None)
+        st.caption(f"Length: {len(orf)} bp ({len(orf)//3} codons)")
+        st.download_button(
+            "⬇ Download ORF",
+            data=orf,
+            file_name="orf.txt",
+            mime="text/plain"
+        )
+    else:
+        st.info("No ATG start codon found in this sequence.")
+
+   
